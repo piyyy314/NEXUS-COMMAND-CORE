@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "Loot": {
+      "title": "Loot",
+      "description": "Encrypted harvested data stored securely",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The user ID of the owner"
+        },
+        "type": {
+          "type": "string",
+          "description": "The category of the loot"
+        },
+        "target": {
+          "type": "string",
+          "description": "The target of the operation"
+        },
+        "data": {
+          "type": "string",
+          "description": "The AES encrypted ciphertext of the response/loot"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of when it was stored"
+        }
+      },
+      "required": ["userId", "type", "target", "data", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/loot/{lootId}": {
+      "schema": { "$ref": "#/entities/Loot" },
+      "description": "Stores encrypted sensitive data."
+    }
+  }
+}
