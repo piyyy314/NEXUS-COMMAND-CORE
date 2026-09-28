@@ -1,21 +1,73 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 
 // Initialize the API client
-export const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+export const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY || '',
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
 
-// Models
+// Models conforming to Google GenAI specifications
 export const MODELS = {
-  GENERAL: 'gemini-3-flash-preview',
+  GENERAL: 'gemini-3.8-flash',
   COMPLEX: 'gemini-3.1-pro-preview',
-  FAST: 'gemini-3.1-flash-lite-preview',
-  IMAGE: 'gemini-3.1-flash-image-preview',
-  TTS: 'gemini-3.1-flash-tts-preview'
+  FAST: 'gemini-3.1-flash-lite',
+  IMAGE: 'gemini-3.1-flash-image',
+  TTS: 'gemini-3.8-flash-lite-tts'
+};
+
+// Check if error is quota exhaustion
+export const isQuotaError = (error: any): boolean => {
+  const errorStr = JSON.stringify(error).toLowerCase();
+  const message = (error?.message || '').toLowerCase();
+  return (
+    errorStr.includes("resource_exhausted") ||
+    errorStr.includes("quota") ||
+    message.includes("quota") ||
+    message.includes("resource_exhausted") ||
+    error?.status === 429
+  );
+};
+
+// Safe wrapper that automatically falls back to fast/lite model upon quota exhaustion
+export const safeGenerateContent = async (params: Parameters<typeof ai.models.generateContent>[0]) => {
+  try {
+    return await ai.models.generateContent(params);
+  } catch (error: any) {
+    if (isQuotaError(error) && params.model !== MODELS.FAST) {
+      console.warn(`[Quota Fallback] Model ${params.model} quota exhausted. Transitioning to lightweight model ${MODELS.FAST}...`);
+      return await ai.models.generateContent({
+        ...params,
+        model: MODELS.FAST,
+      });
+    }
+    throw error;
+  }
+};
+
+// Safe streaming wrapper with quota fallback
+export const safeGenerateContentStream = async (params: Parameters<typeof ai.models.generateContentStream>[0]) => {
+  try {
+    return await ai.models.generateContentStream(params);
+  } catch (error: any) {
+    if (isQuotaError(error) && params.model !== MODELS.FAST) {
+      console.warn(`[Quota Fallback] Stream model ${params.model} quota exhausted. Transitioning to ${MODELS.FAST}...`);
+      return await ai.models.generateContentStream({
+        ...params,
+        model: MODELS.FAST,
+      });
+    }
+    throw error;
+  }
 };
 
 // Create a persistent chat for the Chatbot component
-export const createChat = () => {
+export const createChat = (modelName: string = MODELS.GENERAL) => {
   return ai.chats.create({
-    model: MODELS.GENERAL,
+    model: modelName,
     config: {
       systemInstruction: "You are the central AI intelligence of the Fortress Command ethical hacking framework. Provide concise, tactical, and strictly ethical cybersecurity insights."
     }
@@ -23,7 +75,7 @@ export const createChat = () => {
 };
 
 export const searchGrounding = async (query: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: query,
     config: {
@@ -51,7 +103,7 @@ export const mapRecon = async (query: string, latitude?: number, longitude?: num
     };
   }
 
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: query,
     config,
@@ -60,7 +112,7 @@ export const mapRecon = async (query: string, latitude?: number, longitude?: num
 };
 
 export const createTargetIdentity = async (prompt: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.IMAGE,
     contents: {
       parts: [
@@ -77,23 +129,25 @@ export const createTargetIdentity = async (prompt: string) => {
     }
   });
 
-  for (const part of response.candidates![0].content.parts!) {
-    if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
+  const parts = response.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      const mime = part.inlineData.mimeType || "image/png";
+      return `data:${mime};base64,${part.inlineData.data}`;
     }
   }
   throw new Error("No image generated.");
 };
 
 export const synthesizeSpeech = async (text: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.TTS,
     contents: [{ parts: [{ text }] }],
     config: {
       responseModalities: [Modality.AUDIO],
       speechConfig: {
         voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Charon' }, // A bit deeper voice
+          prebuiltVoiceConfig: { voiceName: 'Charon' },
         }
       }
     },
@@ -113,7 +167,7 @@ export const synthesizeSpeech = async (text: string) => {
 };
 
 export const analyzeNetworkTarget = async (ip: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: `Simulate a detailed technical network security scan for the following IP address: ${ip}.
     Provide a report in Markdown format including:
@@ -131,7 +185,7 @@ export const analyzeNetworkTarget = async (ip: string) => {
 };
 
 export const analyzeNetworkTargetStream = async (ip: string) => {
-  return await ai.models.generateContentStream({
+  return await safeGenerateContentStream({
     model: MODELS.GENERAL,
     contents: `Simulate a detailed technical network security scan for the following IP address: ${ip}.
     Provide a report where each finding starts with a specific tag for parsing:
@@ -156,7 +210,7 @@ export const analyzeNetworkTargetStream = async (ip: string) => {
 };
 
 export const auditSourceCode = async (code: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: `Analyze the following source code for security vulnerabilities, logic flaws, and potential attack vectors.
     ---
@@ -176,7 +230,7 @@ export const auditSourceCode = async (code: string) => {
 };
 
 export const generatePhishingCampaign = async (topic: string, targetPersona: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: `Generate a sophisticated spear-phishing pretext and email template based on the following:
     Topic/Bait: ${topic}
@@ -198,7 +252,7 @@ export const generatePhishingCampaign = async (topic: string, targetPersona: str
 };
 
 export const analyzeMalware = async (content: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: `Perform a behavioral and heuristic analysis on the following code snippet or execution chain for indicators of compromise (IoCs) and malicious intent.
     ---
@@ -218,7 +272,7 @@ export const analyzeMalware = async (content: string) => {
 };
 
 export const extractMetadata = async (content: string) => {
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: `Perform a forensic metadata extraction on the provided text, log, or header block. Identify hidden artifacts, origin signatures, and underlying system data.
     ---
@@ -238,15 +292,15 @@ export const extractMetadata = async (content: string) => {
 };
 
 export const handleAiError = (error: any): string => {
+  if (isQuotaError(error)) {
+    return "COMMAND OVERLOAD: AI Quota Exceeded (limit: 25M tokens/day on gemini-3.8-flash). Nexus has engaged high-efficiency fallback channels. If issues persist, please wait a minute or connect a billing project in Settings > Secrets.";
+  }
+  
   const errorStr = JSON.stringify(error).toLowerCase();
   const message = error?.message?.toLowerCase() || "";
   
-  if (errorStr.includes("resource_exhausted") || errorStr.includes("quota") || message.includes("quota") || error?.status === 429) {
-    return "COMMAND OVERLOAD: AI Quota Exceeded. The link to Nexus Central is saturated. Please wait 60 seconds and retry command.";
-  }
-  
   if (errorStr.includes("api_key") || message.includes("api key")) {
-    return "ACCESS DENIED: Invalid or missing API key. Check Nexus Command configuration.";
+    return "ACCESS DENIED: Invalid or missing API key. Check Nexus Command configuration in Settings > Secrets.";
   }
 
   return error?.message || "NEURAL LINK FAILURE: An unexpected error interrupted the operation.";
@@ -294,7 +348,7 @@ export const analyzeSigintData = async (type: 'gps' | 'ew' | 'eavesdropping', lo
     Provide response in elegant, clean Markdown. Keep the tone highly professional, precise, and tactical.`;
   }
 
-  const response = await ai.models.generateContent({
+  const response = await safeGenerateContent({
     model: MODELS.GENERAL,
     contents: prompt,
     config: { systemInstruction }

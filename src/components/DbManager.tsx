@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
-import { Database, HardDrive, Shield, Lock, Trash2, Key, Search, Loader2, Download, ExternalLink, Network, Code } from "lucide-react";
+import { Database, HardDrive, Shield, Lock, Trash2, Search, Loader2, Download, ExternalLink, Network, Code, Mail, Bug, Scan, Radio, X, Copy, Check } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { db, handleFirestoreError, OperationType, collection, query, where, onSnapshot, doc, deleteDoc, Timestamp } from "@/lib/firebase";
+import { db, handleFirestoreError, OperationType, collection, query, where, onSnapshot, doc, deleteDoc } from "@/lib/firebase";
 import type { User } from "firebase/auth";
+import Markdown from "react-markdown";
 
 interface LootEntry {
   id: string;
   type: string;
   target: string;
-  timestamp: Timestamp;
+  timestamp: any;
   data: string;
   userId: string;
 }
@@ -18,6 +19,27 @@ export function DbManager({ user }: { user: User | null }) {
   const [entries, setEntries] = useState<LootEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [viewingEntry, setViewingEntry] = useState<LootEntry | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const getMillis = (ts: any): number => {
+    if (!ts) return 0;
+    if (typeof ts.toMillis === "function") return ts.toMillis();
+    if (typeof ts.toDate === "function") return ts.toDate().getTime();
+    if (typeof ts === "number") return ts;
+    if (ts.seconds) return ts.seconds * 1000;
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+
+  const formatDate = (ts: any): string => {
+    if (!ts) return "Unknown Date";
+    if (typeof ts.toDate === "function") return ts.toDate().toLocaleString();
+    if (ts.seconds) return new Date(ts.seconds * 1000).toLocaleString();
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
+  };
 
   useEffect(() => {
     if (!user) {
@@ -33,11 +55,11 @@ export function DbManager({ user }: { user: User | null }) {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const lootData: LootEntry[] = [];
-      snapshot.forEach((doc) => {
-        lootData.push({ id: doc.id, ...doc.data() } as LootEntry);
+      snapshot.forEach((docSnap) => {
+        lootData.push({ id: docSnap.id, ...docSnap.data() } as LootEntry);
       });
-      // Sort by timestamp desc
-      lootData.sort((a, b) => b.timestamp.toMillis() - a.timestamp.toMillis());
+      // Sort safely by timestamp descending
+      lootData.sort((a, b) => getMillis(b.timestamp) - getMillis(a.timestamp));
       setEntries(lootData);
       setLoading(false);
     }, (error) => {
@@ -49,12 +71,43 @@ export function DbManager({ user }: { user: User | null }) {
   }, [user]);
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm("Are you sure you want to purge this record from the tactical vault?")) return;
     try {
       await deleteDoc(doc(db, "loot", id));
+      setConfirmDeleteId(null);
+      if (viewingEntry?.id === id) {
+        setViewingEntry(null);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `loot/${id}`);
     }
+  };
+
+  const handleDownload = (entry: LootEntry) => {
+    const blob = new Blob([entry.data], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nexus_${entry.type.toLowerCase()}_${entry.id}_${Date.now()}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const getTypeIcon = (type: string) => {
+    if (type.includes("IP_SCAN")) return <Network className="w-5 h-5" />;
+    if (type.includes("SOURCE_AUDIT")) return <Code className="w-5 h-5" />;
+    if (type.includes("PHISHING")) return <Mail className="w-5 h-5" />;
+    if (type.includes("MALWARE")) return <Bug className="w-5 h-5" />;
+    if (type.includes("METADATA")) return <Scan className="w-5 h-5" />;
+    if (type.includes("SIGINT")) return <Radio className="w-5 h-5" />;
+    return <Database className="w-5 h-5" />;
   };
 
   const filteredEntries = entries.filter(e => 
@@ -83,7 +136,7 @@ export function DbManager({ user }: { user: User | null }) {
   }
 
   return (
-    <div className="bento-card h-full max-w-6xl mx-auto w-full p-0 flex flex-col border-primary/20 bg-[#0A0A0B]">
+    <div className="bento-card h-full max-w-6xl mx-auto w-full p-0 flex flex-col border-primary/20 bg-[#0A0A0B] relative overflow-hidden">
       <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-secondary/20 shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-primary/10 rounded-lg">
@@ -117,7 +170,7 @@ export function DbManager({ user }: { user: User | null }) {
 
       <div className="flex-1 overflow-y-auto no-scrollbar relative min-h-0">
         {loading ? (
-          <div className="h-full flex flex-col items-center justify-center gap-4 text-primary">
+          <div className="h-full flex flex-col items-center justify-center gap-4 text-primary py-24">
             <Loader2 className="w-10 h-10 animate-spin" />
             <span className="text-[10px] font-black uppercase tracking-[0.4em] animate-pulse">Decrypting Records...</span>
           </div>
@@ -140,21 +193,39 @@ export function DbManager({ user }: { user: User | null }) {
                 <div className="flex items-start justify-between relative z-10">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-black/40 border border-white/5 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
-                      {entry.type === 'IP_SCAN' ? <Network className="w-5 h-5" /> : entry.type === 'SOURCE_AUDIT' ? <Code className="w-5 h-5" /> : <Database className="w-5 h-5" />}
+                      {getTypeIcon(entry.type)}
                     </div>
                     <div>
                       <div className="text-[11px] font-black uppercase tracking-widest text-white group-hover:text-primary transition-colors">{entry.target}</div>
-                      <div className="text-[9px] text-muted-foreground uppercase font-bold tracking-tighter opacity-50">{entry.type} // {entry.timestamp.toDate().toLocaleString()}</div>
+                      <div className="text-[9px] text-muted-foreground uppercase font-bold tracking-tighter opacity-50">{entry.type} // {formatDate(entry.timestamp)}</div>
                     </div>
                   </div>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={() => handleDelete(entry.id)} 
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  {confirmDeleteId === entry.id ? (
+                    <div className="flex items-center gap-1.5 bg-destructive/10 border border-destructive/30 p-1 rounded-lg">
+                      <button 
+                        onClick={() => handleDelete(entry.id)} 
+                        className="text-[9px] font-black uppercase tracking-wider text-destructive hover:bg-destructive hover:text-white px-2 py-1 rounded transition-colors"
+                      >
+                        Purge
+                      </button>
+                      <button 
+                        onClick={() => setConfirmDeleteId(null)} 
+                        className="text-[9px] font-black uppercase tracking-wider text-muted-foreground hover:text-white px-1.5 py-1 rounded"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={() => setConfirmDeleteId(entry.id)} 
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg"
+                      title="Purge record"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  )}
                 </div>
                 
                 <div className="flex-grow min-h-0 relative z-10">
@@ -165,11 +236,20 @@ export function DbManager({ user }: { user: User | null }) {
                 </div>
 
                 <div className="flex items-center gap-2 relative z-10">
-                  <Button variant="outline" className="flex-1 h-9 text-[10px] uppercase font-black tracking-widest border-white/10 hover:border-primary/50 bg-transparent">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setViewingEntry(entry)}
+                    className="flex-1 h-9 text-[10px] uppercase font-black tracking-widest border-white/10 hover:border-primary/50 bg-transparent"
+                  >
                     <ExternalLink className="w-3.5 h-3.5 mr-2 text-primary" /> View Full Intel
                   </Button>
-                  <Button variant="outline" className="h-9 px-3 border-white/10 hover:border-primary/50 bg-transparent">
-                    <Download className="w-3.5 h-3.5 text-primary opacity-50" />
+                  <Button 
+                    variant="outline" 
+                    onClick={() => handleDownload(entry)}
+                    className="h-9 px-3 border-white/10 hover:border-primary/50 bg-transparent hover:text-primary"
+                    title="Export Intel"
+                  >
+                    <Download className="w-3.5 h-3.5 text-primary opacity-70 group-hover:opacity-100" />
                   </Button>
                 </div>
               </div>
@@ -177,6 +257,60 @@ export function DbManager({ user }: { user: User | null }) {
           </div>
         )}
       </div>
+
+      {/* Full Intel Viewer Overlay Modal */}
+      {viewingEntry && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 md:p-8 animate-in fade-in duration-200">
+          <div className="bg-[#0e0e11] border border-primary/30 rounded-2xl max-w-4xl w-full h-[85vh] flex flex-col shadow-[0_0_50px_rgba(0,0,0,0.8)] overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-secondary/30 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-primary/10 rounded-lg text-primary">
+                  {getTypeIcon(viewingEntry.type)}
+                </div>
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-widest text-white">{viewingEntry.target}</h3>
+                  <p className="text-[10px] text-muted-foreground uppercase font-mono mt-0.5">
+                    {viewingEntry.type} // {formatDate(viewingEntry.timestamp)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => handleCopy(viewingEntry.data)} 
+                  className="h-8 text-[10px] uppercase font-black"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 mr-1 text-green-500" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => handleDownload(viewingEntry)} 
+                  className="h-8 text-[10px] uppercase font-black"
+                >
+                  <Download className="w-3.5 h-3.5 mr-1" /> Export
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => setViewingEntry(null)} 
+                  className="h-8 w-8 text-muted-foreground hover:text-white rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-black/40">
+              <div className="markdown-body prose prose-invert max-w-none prose-sm prose-p:leading-relaxed prose-headings:text-primary prose-headings:font-black prose-headings:uppercase prose-headings:tracking-widest prose-strong:text-primary prose-code:text-primary text-[13px]">
+                <Markdown>{viewingEntry.data}</Markdown>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

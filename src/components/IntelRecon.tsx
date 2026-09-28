@@ -11,6 +11,19 @@ export function IntelRecon() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ text: string, sources: any[] } | null>(null);
 
+  const getCoordinates = (): Promise<{ latitude?: number; longitude?: number }> => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        return resolve({});
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        () => resolve({}),
+        { timeout: 6000 }
+      );
+    });
+  };
+
   const handleSearch = async (type: 'search' | 'maps') => {
     if (!query.trim() || loading) return;
     
@@ -22,31 +35,13 @@ export function IntelRecon() {
       if (type === 'search') {
         response = await searchGrounding(query);
       } else {
-        if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(async (pos) => {
-            const res = await mapRecon(query, pos.coords.latitude, pos.coords.longitude);
-            setResult({
-              text: res.text,
-              sources: res.candidates?.[0]?.groundingMetadata?.groundingChunks || []
-            });
-            setLoading(false);
-          }, async () => {
-            const res = await mapRecon(query);
-            setResult({
-              text: res.text,
-              sources: res.candidates?.[0]?.groundingMetadata?.groundingChunks || []
-            });
-            setLoading(false);
-          });
-          return;
-        } else {
-          response = await mapRecon(query);
-        }
+        const coords = await getCoordinates();
+        response = await mapRecon(query, coords.latitude, coords.longitude);
       }
 
       if (response) {
         setResult({
-          text: response.text,
+          text: response.text || "No intelligence data returned.",
           sources: response.candidates?.[0]?.groundingMetadata?.groundingChunks || []
         });
       }
@@ -55,7 +50,7 @@ export function IntelRecon() {
       const friendlyError = handleAiError(error);
       setResult({ text: `[ERROR] Intelligence gathering failed: ${friendlyError}`, sources: [] });
     } finally {
-      if (type === 'search') setLoading(false);
+      setLoading(false);
     }
   };
 

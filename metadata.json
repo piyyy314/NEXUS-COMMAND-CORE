@@ -1,6 +1,8 @@
 {
   "name": "Remix: Fortress Command",
   "description": "A comprehensive offensive and defensive cybersecurity command center toolkit.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "geolocation"
+  ],
   "majorCapabilities": []
 }

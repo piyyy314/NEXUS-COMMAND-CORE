@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Send, Volume2, Loader2, Terminal, Trash2, Command, Download } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { createChat, synthesizeSpeech, handleAiError } from "@/lib/gemini";
+import { createChat, synthesizeSpeech, handleAiError, isQuotaError, MODELS } from "@/lib/gemini";
 import Markdown from "react-markdown";
 
 let chatSession: any = null;
@@ -67,8 +67,19 @@ export function GhostChat() {
     setLoading(true);
 
     try {
-      const response = await chatSession.sendMessage({ message: userMessage });
-      const text = response.text;
+      let response;
+      try {
+        response = await chatSession.sendMessage({ message: userMessage });
+      } catch (err: any) {
+        if (isQuotaError(err)) {
+          console.warn("[Quota Fallback] GhostChat switching to lightweight model...");
+          chatSession = createChat(MODELS.FAST);
+          response = await chatSession.sendMessage({ message: userMessage });
+        } else {
+          throw err;
+        }
+      }
+      const text = response.text || "";
       setMessages((prev) => [...prev, { role: 'model', text }]);
     } catch (error) {
       console.error(error);

@@ -38,7 +38,7 @@ export function IPScanner({ user }: { user: User | null }) {
   const filteredFindings = useMemo(() => {
     if (filter === 'all') return findings;
     const tag = `[${filter.toUpperCase()}]`;
-    return findings.filter(f => f.includes(tag));
+    return findings.filter(f => f.toUpperCase().includes(tag));
   }, [findings, filter]);
 
   const handleScan = async (e: React.FormEvent) => {

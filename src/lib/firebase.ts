@@ -179,21 +179,21 @@ const triggerListenersForPath = (collectionPath: string) => {
 
 // Mock firestore functions
 export const collection = (dbInstance: any, path: string) => {
-  if (!isOfflineFallback && dbInstance !== db) {
+  if (!isOfflineFallback && dbInstance && dbInstance.type !== "mock-db") {
     return realCollection(dbInstance, path);
   }
   return { type: "collection", path };
 };
 
 export const doc = (dbInstance: any, path: string, id?: string) => {
-  if (!isOfflineFallback && dbInstance !== db) {
-    return realDoc(dbInstance, path, id || "");
+  if (!isOfflineFallback && dbInstance && dbInstance.type !== "mock-db") {
+    return id ? realDoc(dbInstance, path, id) : realDoc(dbInstance, path);
   }
   return { type: "doc", path, id: id || Math.random().toString(36).substring(2, 11) };
 };
 
 export const query = (collectionRef: any, ...constraints: any[]) => {
-  if (!isOfflineFallback && collectionRef.type !== "collection") {
+  if (!isOfflineFallback && collectionRef && collectionRef.type !== "collection") {
     return realQuery(collectionRef, ...constraints);
   }
   return { type: "query", collectionRef, constraints };
@@ -211,7 +211,7 @@ export const where = (field: string, op: string, value: any) => {
 };
 
 export const addDoc = async (collectionRef: any, data: any) => {
-  if (!isOfflineFallback && collectionRef.type !== "collection") {
+  if (!isOfflineFallback && collectionRef && collectionRef.type !== "collection") {
     return await realAddDoc(collectionRef, data);
   }
   const path = collectionRef.path;
@@ -227,7 +227,7 @@ export const addDoc = async (collectionRef: any, data: any) => {
 };
 
 export const deleteDoc = async (docRef: any) => {
-  if (!isOfflineFallback && docRef.type !== "doc") {
+  if (!isOfflineFallback && docRef && docRef.type !== "doc") {
     return await realDeleteDoc(docRef);
   }
   const path = docRef.path || "loot";
@@ -245,7 +245,7 @@ export const onSnapshot = (
   callback: (snapshot: any) => void, 
   errorCallback?: (error: any) => void
 ) => {
-  if (!isOfflineFallback && queryOrRef.type !== "query" && queryOrRef.type !== "collection") {
+  if (!isOfflineFallback && queryOrRef && queryOrRef.type !== "query" && queryOrRef.type !== "collection") {
     return realOnSnapshot(queryOrRef, callback, errorCallback);
   }
 
