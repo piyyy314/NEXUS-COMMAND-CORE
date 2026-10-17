@@ -1,6 +1,13 @@
-import { Terminal, Shield, Eye, Image as ImageIcon, Database, Globe, Server, Activity, HardDrive, Network, Code, Mail, Bug, Scan, Radio } from "lucide-react";
+import { Terminal, Shield, Eye, Image as ImageIcon, Database, Globe, Server, Activity, HardDrive, Network, Code, Mail, Bug, Scan, Radio, Search, BookOpen } from "lucide-react";
+import { NavModule } from "./CommandPalette";
 
-export function Dashboard({ onNavigate }: { onNavigate: (module: 'dashboard' | 'chat' | 'recon' | 'image' | 'db' | 'ip-scan' | 'source-audit' | 'phishing' | 'malware' | 'metadata' | 'sigint') => void }) {
+export function Dashboard({ 
+  onNavigate,
+  onOpenCommandPalette
+}: { 
+  onNavigate: (module: NavModule) => void;
+  onOpenCommandPalette?: () => void;
+}) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 auto-rows-min gap-6 flex-1 min-h-0 overflow-y-auto w-full max-w-full pb-8 pr-2 no-scrollbar">
       {/* 2x2 Main Active Environment Card */}
@@ -26,6 +33,15 @@ export function Dashboard({ onNavigate }: { onNavigate: (module: 'dashboard' | '
               <Server className="w-3 h-3 text-primary" />
               <span className="text-[10px] font-black text-primary uppercase tracking-tighter">Region: US-EAST-1</span>
             </div>
+            {onOpenCommandPalette && (
+              <button 
+                onClick={onOpenCommandPalette}
+                className="flex items-center gap-1.5 px-2 py-1 bg-primary/20 hover:bg-primary/30 border border-primary/30 rounded text-[10px] font-mono font-bold text-primary transition-colors ml-auto"
+              >
+                <Search className="w-3 h-3" />
+                <span>Command Palette (⌘K)</span>
+              </button>
+            )}
           </div>
           
           <div className="space-y-1 font-mono text-[11px] text-primary/80 bg-black/40 p-5 rounded-xl border border-white/5 backdrop-blur-sm relative overflow-hidden group">
@@ -34,8 +50,10 @@ export function Dashboard({ onNavigate }: { onNavigate: (module: 'dashboard' | '
             <div className="flex items-center gap-3"><span className="text-[9px] opacity-30">02</span> <span className="text-white/40">{">>" }</span> Synchronizing with remote vault...</div>
             <div className="flex items-center gap-3 text-green-500"><span className="text-[9px] opacity-30">03</span> <span className="text-white/40">{">>" }</span> Firebase connection established.</div>
             <div className="flex items-center gap-3 text-primary"><span className="text-[9px] opacity-30">04</span> <span className="text-white/40">{">>" }</span> AES-256 GCM logic engaged.</div>
-            <div className="mt-4 pt-4 border-t border-white/5 text-foreground/90 font-bold uppercase tracking-[0.2em]">{">"} Operative session active.</div>
-            <div className="animate-pulse mt-1 text-primary cursor-default">_</div>
+            <div className="mt-4 pt-4 border-t border-white/5 flex items-center justify-between text-foreground/90 font-bold uppercase tracking-[0.2em]">
+              <span>{">"} Operative session active.</span>
+              <span className="animate-pulse text-primary cursor-default font-mono">_</span>
+            </div>
           </div>
         </div>
       </div>
@@ -53,6 +71,14 @@ export function Dashboard({ onNavigate }: { onNavigate: (module: 'dashboard' | '
         icon={<Radio className="w-8 h-8" />} 
         description="RF & GPS Defense"
         onClick={() => onNavigate('sigint')} 
+      />
+
+      <DashboardToolCard 
+        title="Command & Docs" 
+        icon={<BookOpen className="w-8 h-8" />} 
+        description="Search Manuals (⌘K)"
+        onClick={() => onOpenCommandPalette ? onOpenCommandPalette() : undefined}
+        status={<div className="text-[9px] font-mono text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded font-black">⌘K</div>}
       />
 
       <DashboardToolCard 
@@ -128,7 +154,19 @@ export function Dashboard({ onNavigate }: { onNavigate: (module: 'dashboard' | '
   );
 }
 
-function DashboardToolCard({ title, icon, description, onClick, status }: { title: string, icon: React.ReactNode, description: string, onClick: () => void, status?: React.ReactNode }) {
+function DashboardToolCard({ 
+  title, 
+  icon, 
+  description, 
+  onClick, 
+  status 
+}: { 
+  title: string, 
+  icon: React.ReactNode, 
+  description: string, 
+  onClick?: () => void, 
+  status?: React.ReactNode 
+}) {
   return (
     <div 
       className="bento-card group cursor-pointer hover:border-primary/50 hover:bg-secondary/40 transition-all duration-300 relative overflow-hidden h-[180px] p-6"

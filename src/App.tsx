@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Shield, Key, LogOut } from "lucide-react";
+import { Shield, Key, LogOut, Search, Terminal } from "lucide-react";
 import { GhostChat } from "./components/GhostChat";
 import { IntelRecon } from "./components/IntelRecon";
 import { ImageOps } from "./components/ImageOps";
@@ -11,19 +11,33 @@ import { PhishingLab } from "./components/PhishingLab";
 import { MalwareAnalyzer } from "./components/MalwareAnalyzer";
 import { MetadataX } from "./components/MetadataX";
 import { SigintSuite } from "./components/SigintSuite";
+import { CommandPalette, NavModule } from "./components/CommandPalette";
 import { auth, signInWithGoogle, logout, onAuthStateChanged } from "./lib/firebase";
 import type { User } from "firebase/auth";
 import { Button } from "./components/ui/button";
 
 export default function App() {
-  const [activeModule, setActiveModule] = useState<'dashboard' | 'chat' | 'recon' | 'image' | 'db' | 'ip-scan' | 'source-audit' | 'phishing' | 'malware' | 'metadata' | 'sigint'>('dashboard');
+  const [activeModule, setActiveModule] = useState<NavModule>('dashboard');
   const [user, setUser] = useState<User | null>(null);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
     });
     return () => unsubscribe();
+  }, []);
+
+  // Keyboard shortcut listener for Cmd+K / Ctrl+K
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   return (
@@ -38,8 +52,8 @@ export default function App() {
           <span className="sm:hidden text-primary">NEXUS</span>
         </div>
         
-        {/* Navigation - Scrollable on mobile */}
-        <div className="flex items-center gap-1 overflow-x-auto max-w-full pb-1 scrollbar-hide no-scrollbar">
+        {/* Navigation & Command Palette Trigger */}
+        <div className="flex items-center gap-2 overflow-x-auto max-w-full pb-1 scrollbar-hide no-scrollbar">
           <div className="flex gap-1 items-center px-1">
             <NavPill label="Dash" isActive={activeModule === 'dashboard'} onClick={() => setActiveModule('dashboard')} />
             <div className="w-[1px] h-4 bg-border mx-1"></div>
@@ -55,9 +69,23 @@ export default function App() {
             <NavPill label="Vault" isActive={activeModule === 'db'} onClick={() => setActiveModule('db')} />
           </div>
           
-          <div className="w-[1px] h-6 bg-border mx-2"></div>
-          
-          <div className="flex items-center gap-2 shrink-0 pr-2">
+          <div className="w-[1px] h-6 bg-border mx-1 shrink-0"></div>
+
+          {/* Command Palette Trigger Button */}
+          <Button
+            variant="outline"
+            onClick={() => setCommandPaletteOpen(true)}
+            className="h-8 px-2.5 bg-black/40 border-white/10 hover:border-primary/50 text-muted-foreground hover:text-white text-xs font-mono flex items-center gap-2 rounded-lg shrink-0 transition-all hover:shadow-[0_0_10px_rgba(62,99,221,0.2)]"
+            title="Search & Command Palette (Cmd+K / Ctrl+K)"
+          >
+            <Search className="w-3.5 h-3.5 text-primary" />
+            <span className="hidden xl:inline text-[10px] uppercase font-bold tracking-wider text-foreground">Palette</span>
+            <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[9px] font-mono bg-white/5 border border-white/10 rounded text-muted-foreground">
+              ⌘K
+            </kbd>
+          </Button>
+
+          <div className="flex items-center gap-2 shrink-0 pr-2 ml-1">
             {user ? (
               <div className="flex items-center gap-2">
                 <div className="hidden lg:flex flex-col items-end mr-1">
@@ -79,7 +107,7 @@ export default function App() {
 
       {/* Main Content Component Container */}
       <main className="flex-grow flex flex-col relative overflow-hidden min-h-0 p-4 md:p-6 lg:p-8">
-        {activeModule === 'dashboard' && <Dashboard onNavigate={setActiveModule as any} />}
+        {activeModule === 'dashboard' && <Dashboard onNavigate={setActiveModule} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />}
         {activeModule === 'chat' && <GhostChat />}
         {activeModule === 'recon' && <IntelRecon />}
         {activeModule === 'ip-scan' && <IPScanner user={user} />}
@@ -91,6 +119,13 @@ export default function App() {
         {activeModule === 'image' && <ImageOps />}
         {activeModule === 'db' && <DbManager user={user} />}
       </main>
+
+      {/* Command Palette Dialog */}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        onNavigate={setActiveModule}
+      />
     </div>
   );
 }
