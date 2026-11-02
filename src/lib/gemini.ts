@@ -1,357 +1,346 @@
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+// Client-side AI module proxy
+// All Gemini operations, models, and secret keys are routed to the Express backend (/api/*)
+// completely removing client-side @google/genai dependencies.
 
-// Initialize the API client
-export const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
-});
-
-// Models conforming to Google GenAI specifications
 export const MODELS = {
   GENERAL: 'gemini-3.8-flash',
   COMPLEX: 'gemini-3.1-pro-preview',
   FAST: 'gemini-3.1-flash-lite',
   IMAGE: 'gemini-3.1-flash-image',
-  TTS: 'gemini-3.8-flash-lite-tts'
+  TTS: 'gemini-3.8-flash-lite-tts',
 };
 
 // Check if error is quota exhaustion
 export const isQuotaError = (error: any): boolean => {
-  const errorStr = JSON.stringify(error).toLowerCase();
+  if (!error) return false;
+  if (error?.status === 429 || error?.code === 429) return true;
   const message = (error?.message || '').toLowerCase();
+  let errorStr = '';
+  try {
+    errorStr = JSON.stringify(error).toLowerCase();
+  } catch {
+    errorStr = '';
+  }
   return (
-    errorStr.includes("resource_exhausted") ||
-    errorStr.includes("quota") ||
-    message.includes("quota") ||
-    message.includes("resource_exhausted") ||
-    error?.status === 429
+    errorStr.includes('resource_exhausted') ||
+    errorStr.includes('quota') ||
+    errorStr.includes('429') ||
+    message.includes('quota') ||
+    message.includes('resource_exhausted') ||
+    message.includes('rate-limit') ||
+    message.includes('429')
   );
 };
 
-// Safe wrapper that automatically falls back to fast/lite model upon quota exhaustion
-export const safeGenerateContent = async (params: Parameters<typeof ai.models.generateContent>[0]) => {
-  try {
-    return await ai.models.generateContent(params);
-  } catch (error: any) {
-    if (isQuotaError(error) && params.model !== MODELS.FAST) {
-      console.warn(`[Quota Fallback] Model ${params.model} quota exhausted. Transitioning to lightweight model ${MODELS.FAST}...`);
-      return await ai.models.generateContent({
-        ...params,
-        model: MODELS.FAST,
-      });
-    }
-    throw error;
+// User-friendly error formatting
+export const handleAiError = (error: any): string => {
+  if (isQuotaError(error)) {
+    return 'COMMAND OVERLOAD: AI Quota Exceeded (limit: 25M tokens/day on gemini-3.8-flash). Nexus has engaged high-efficiency fallback channels. If issues persist, please wait a minute or connect a billing project in Settings > Secrets.';
   }
+
+  const message = error?.message || '';
+  const errorStr = (typeof error === 'string' ? error : JSON.stringify(error) || '').toLowerCase();
+
+  // Try extracting error message from nested JSON error string (e.g. from Google API)
+  if (message.startsWith('{') && message.includes('"message"')) {
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed.error?.message) {
+        if (isQuotaError(parsed.error)) {
+          return 'COMMAND OVERLOAD: AI Quota Exceeded. Nexus has engaged high-efficiency fallback channels.';
+        }
+        return `NEURAL ALERT: ${parsed.error.message}`;
+      }
+    } catch {
+      // ignore JSON parse fallback
+    }
+  }
+
+  if (errorStr.includes('api_key') || message.toLowerCase().includes('api key')) {
+    return 'ACCESS DENIED: Invalid or missing API key. Check Nexus Command configuration in Settings > Secrets.';
+  }
+
+  if (errorStr.includes('timeout') || message.toLowerCase().includes('timeout') || errorStr.includes('fetch failed')) {
+    return 'UPLINK DELAY: Satellite telemetry link timed out. Nexus fallback channels active.';
+  }
+
+  return message || 'NEURAL LINK FAILURE: An unexpected error interrupted the operation.';
 };
 
-// Safe streaming wrapper with quota fallback
-export const safeGenerateContentStream = async (params: Parameters<typeof ai.models.generateContentStream>[0]) => {
-  try {
-    return await ai.models.generateContentStream(params);
-  } catch (error: any) {
-    if (isQuotaError(error) && params.model !== MODELS.FAST) {
-      console.warn(`[Quota Fallback] Stream model ${params.model} quota exhausted. Transitioning to ${MODELS.FAST}...`);
-      return await ai.models.generateContentStream({
-        ...params,
-        model: MODELS.FAST,
-      });
-    }
-    throw error;
-  }
-};
-
-// Create a persistent chat for the Chatbot component
+// Create a conversational session that proxies messages to /api/chat/send
 export const createChat = (modelName: string = MODELS.GENERAL) => {
-  return ai.chats.create({
+  let history: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+  return {
     model: modelName,
-    config: {
-      systemInstruction: "You are the central AI intelligence of the Fortress Command ethical hacking framework. Provide concise, tactical, and strictly ethical cybersecurity insights."
-    }
-  });
-};
+    sendMessage: async ({ message }: { message: string }) => {
+      const res = await fetch('/api/chat/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          model: modelName,
+          history,
+        }),
+      });
 
-export const searchGrounding = async (query: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: query,
-    config: {
-      tools: [{ googleSearch: {} }],
-      systemInstruction: "You are a cyber operations intelligence module. Use search to gather accurate, up-to-date information regarding the user's query."
-    }
-  });
-  return response;
-};
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Chat network request failed.' }));
+        throw new Error(err.error || `HTTP error ${res.status}`);
+      }
 
-export const mapRecon = async (query: string, latitude?: number, longitude?: number) => {
-  const config: any = {
-    tools: [{ googleMaps: {} }],
-    systemInstruction: "You are performing geographical recon for operations. Provide precise location intelligence."
+      const data = await res.json();
+      if (data.history) {
+        history = data.history;
+      }
+      return {
+        text: data.text || '',
+      };
+    },
   };
-  
-  if (latitude !== undefined && longitude !== undefined) {
-    config.toolConfig = {
-      retrievalConfig: {
-        latLng: {
-          latitude,
-          longitude
-        }
-      }
-    };
-  }
-
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: query,
-    config,
-  });
-  return response;
 };
 
-export const createTargetIdentity = async (prompt: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.IMAGE,
-    contents: {
-      parts: [
-        {
-          text: prompt,
-        },
-      ],
-    },
-    config: {
-      imageConfig: {
-        aspectRatio: "1:1",
-        imageSize: "1K"
-      }
-    }
+// Search grounding via server proxy
+export const searchGrounding = async (query: string) => {
+  const res = await fetch('/api/recon/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
   });
 
-  const parts = response.candidates?.[0]?.content?.parts || [];
-  for (const part of parts) {
-    if (part.inlineData?.data) {
-      const mime = part.inlineData.mimeType || "image/png";
-      return `data:${mime};base64,${part.inlineData.data}`;
-    }
+  const data = await res.json().catch(() => ({ error: 'Search recon request failed.' }));
+  if (!res.ok && !data.text) {
+    throw new Error(data.error || `HTTP error ${res.status}`);
   }
-  throw new Error("No image generated.");
+
+  return data;
 };
 
-export const synthesizeSpeech = async (text: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.TTS,
-    contents: [{ parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Charon' },
-        }
-      }
-    },
+// Geographical recon via server proxy
+export const mapRecon = async (query: string, latitude?: number, longitude?: number) => {
+  const res = await fetch('/api/recon/map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, latitude, longitude }),
   });
 
-  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (!base64Audio) throw new Error("No audio returned");
+  const data = await res.json().catch(() => ({ error: 'Map recon request failed.' }));
+  if (!res.ok && !data.text) {
+    throw new Error(data.error || `HTTP error ${res.status}`);
+  }
 
-  // Create a Blob from base64
+  return data;
+};
+
+// Target identity synthesis (image) via server proxy
+export const createTargetIdentity = async (prompt: string): Promise<string> => {
+  const res = await fetch('/api/image/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Target identity synthesis failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
+  }
+
+  const data = await res.json();
+  if (!data.imageUrl) throw new Error('No image generated.');
+  return data.imageUrl;
+};
+
+// Speech synthesis (TTS) via server proxy
+export const synthesizeSpeech = async (text: string): Promise<string> => {
+  const res = await fetch('/api/tts/synthesize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Speech synthesis request failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
+  }
+
+  const { base64Audio, mimeType = 'audio/wav' } = await res.json();
+  if (!base64Audio) throw new Error('No audio returned');
+
   const binary = atob(base64Audio);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  const blob = new Blob([bytes], { type: "audio/wav" });
+  const blob = new Blob([bytes], { type: mimeType });
   return URL.createObjectURL(blob);
 };
 
-export const analyzeNetworkTarget = async (ip: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: `Simulate a detailed technical network security scan for the following IP address: ${ip}.
-    Provide a report in Markdown format including:
-    1. Host Status (UP/DOWN)
-    2. Open Ports and Services (e.g., 22/SSH, 80/HTTP, 443/HTTPS)
-    3. Service Versions (fictional but realistic)
-    4. Potential Vulnerabilities (CVE references or general issues)
-    5. Tactical Recommendations.
-    Keep the tone professional and tactical.`,
-    config: {
-      systemInstruction: "You are an automated network vulnerability scanner. Generate realistic, tactical security reports for target IPs."
-    }
+// Unary network security scan via server proxy
+export const analyzeNetworkTarget = async (ip: string): Promise<string> => {
+  const res = await fetch('/api/network/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip }),
   });
-  return response.text;
-};
 
-export const analyzeNetworkTargetStream = async (ip: string) => {
-  return await safeGenerateContentStream({
-    model: MODELS.GENERAL,
-    contents: `Simulate a detailed technical network security scan for the following IP address: ${ip}.
-    Provide a report where each finding starts with a specific tag for parsing:
-    - For open ports: ## [PORT] [Port Number]/[Protocol]
-    - For services: ## [SERVICE] [Service Name] ([Version])
-    - For vulnerabilities: ## [VULN] [CVE-ID if any] [Vulnerability Name]
-    - For host status: ## [STATUS] [Host Status]
-    - For recommendations: ## [RECO] [Recommendation]
-    
-    Structure the report like this:
-    1. Host Status ([STATUS])
-    2. Open Ports ([PORT])
-    3. Services ([SERVICE])
-    4. Vulnerabilities ([VULN])
-    5. Recommendations ([RECO])
-    
-    As you scan, reveal these findings immediately. Keep the tone professional and tactical.`,
-    config: {
-      systemInstruction: "You are an automated network vulnerability scanner. Generate realistic, tactical security reports for target IPs using specific [TAG] headers for structured discovery."
-    }
-  });
-};
-
-export const auditSourceCode = async (code: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: `Analyze the following source code for security vulnerabilities, logic flaws, and potential attack vectors.
-    ---
-    ${code}
-    ---
-    Provide a detailed report in Markdown including:
-    1. Identified Vulnerabilities (with severity)
-    2. Potential Impact
-    3. Remediation Steps
-    4. Best Practice Recommendations.
-    Maintain a highly technical and professional security auditor persona.`,
-    config: {
-      systemInstruction: "You are an elite application security auditor. Perform deep static analysis on code snippets."
-    }
-  });
-  return response.text;
-};
-
-export const generatePhishingCampaign = async (topic: string, targetPersona: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: `Generate a sophisticated spear-phishing pretext and email template based on the following:
-    Topic/Bait: ${topic}
-    Target Persona: ${targetPersona}
-    
-    Provide:
-    1. Pretext Scenario (Why this works)
-    2. Email Subject Line
-    3. Email Body (Professional and convincing)
-    4. Suggested Call to Action (The "hook")
-    5. Recommended Delivery Method.
-    
-    Maintain a strictly educational/simulated tone. Be highly creative in the social engineering aspects.`,
-    config: {
-      systemInstruction: "You are a social engineering simulation expert. Generate realistic phishing templates for training and audit purposes."
-    }
-  });
-  return response.text;
-};
-
-export const analyzeMalware = async (content: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: `Perform a behavioral and heuristic analysis on the following code snippet or execution chain for indicators of compromise (IoCs) and malicious intent.
-    ---
-    ${content}
-    ---
-    Provide a tactical assessment report in Markdown:
-    1. Threat Level (Low/Med/High/Critical)
-    2. Malicious Intent Signature (What the code is trying to do)
-    3. Potential Impact on Target System
-    4. Suggested Mitigation/Defensive Countermeasures.
-    Maintain a technical and forensic persona.`,
-    config: {
-      systemInstruction: "You are an AI-driven malware sandbox analyzer. Detect malicious patterns in code and provide tactical defensive intelligence."
-    }
-  });
-  return response.text;
-};
-
-export const extractMetadata = async (content: string) => {
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: `Perform a forensic metadata extraction on the provided text, log, or header block. Identify hidden artifacts, origin signatures, and underlying system data.
-    ---
-    ${content}
-    ---
-    Provide a forensic report in Markdown:
-    1. Direct Extracted Metadata (Key: Value pairs)
-    2. Hidden Artifacts & Origin Signatures
-    3. Potential Geolocation or System Identity Markers
-    4. Privacy/OpSec Risk Assessment.
-    Be thorough and technical.`,
-    config: {
-      systemInstruction: "You are a forensic metadata extraction engine. Uncover hidden artifacts and identifying information from raw data blocks."
-    }
-  });
-  return response.text;
-};
-
-export const handleAiError = (error: any): string => {
-  if (isQuotaError(error)) {
-    return "COMMAND OVERLOAD: AI Quota Exceeded (limit: 25M tokens/day on gemini-3.8-flash). Nexus has engaged high-efficiency fallback channels. If issues persist, please wait a minute or connect a billing project in Settings > Secrets.";
-  }
-  
-  const errorStr = JSON.stringify(error).toLowerCase();
-  const message = error?.message?.toLowerCase() || "";
-  
-  if (errorStr.includes("api_key") || message.includes("api key")) {
-    return "ACCESS DENIED: Invalid or missing API key. Check Nexus Command configuration in Settings > Secrets.";
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Scan request failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
   }
 
-  return error?.message || "NEURAL LINK FAILURE: An unexpected error interrupted the operation.";
+  const data = await res.json();
+  return data.text || '';
 };
 
-export const analyzeSigintData = async (type: 'gps' | 'ew' | 'eavesdropping', logContent: string) => {
-  const systemInstruction = "You are a senior Signals Intelligence (SIGINT) and Electronic Warfare (EW) analyst for Fortress Command. Provide professional, extremely detailed, and highly tactical analyses of RF signals, GPS telemetry, or network-eavesdropping data.";
-  
-  let prompt = "";
-  if (type === 'gps') {
-    prompt = `Perform a deep forensic analysis on the following GPS/NMEA telemetry log or positioning report:
-    ---
-    ${logContent}
-    ---
-    Determine if GPS Spoofing, ephemeris replay, or signal manipulation is taking place.
-    Your report MUST include:
-    1. Threat Verdict (Spoofing Detected / No Anomaly / Jamming suspected)
-    2. Discrepancy Analysis (Comparison of coordinates, altitudes, speed, and positioning system discrepancies)
-    3. NMEA Sentence Assessment (Look for telltale indicators: HDOP, VDOP, duplicate satellite IDs, SNR, sudden positioning jumps)
-    4. Suggested Mitigation & OpSec Guidelines (e.g., GPSTest verification, auxiliary IMU sensors, Faraday bag deployment, offline/inertial navigation).
-    Provide response in elegant, clean Markdown. Keep the tone highly professional, precise, and tactical.`;
-  } else if (type === 'ew') {
-    prompt = `Analyze the following Electronic Warfare (EW) or RF Jamming spectral scan report / signal log:
-    ---
-    ${logContent}
-    ---
-    Evaluate whether active jamming (noise, comb pattern, continuous wave) or other interference is occurring.
-    Your report MUST include:
-    1. RF Threat Level (No Jamming / Broadband Noise Jamming / Spot Jamming / Sweep Jamming)
-    2. Spectrum Fingerprint (Evaluation of band power spikes, noise floors, comb patterns, and signal structures)
-    3. Impact Assessment (LTE/Cellular, Wi-Fi 2.4/5GHz, GNSS, Bluetooth)
-    4. Tactical Countermeasures (SDR GQRX/SDR# monitoring, transitioning to wired networks, directional antennas, Faraday shield bags, localized RF sweeps).
-    Provide response in elegant, clean Markdown. Keep the tone highly professional, precise, and tactical.`;
-  } else {
-    prompt = `Analyze the following Eavesdropping & Process Netstat/Lsof / RF Sweeper log or process list:
-    ---
-    ${logContent}
-    ---
-    Analyze it for signs of physical RF bugs, covert burst transmissions, or digital spyware establishing unauthorized outbound connections.
-    Your report MUST include:
-    1. Eavesdropping Threat Level (High / Med / Low)
-    2. Digital Outbound Link Analysis (Suspicious established network connections, remote IPs, and host processes)
-    3. Physical/RF Sweeper Signature (Analyzing any RF power level spikes, burst transmission patterns, or transmitter signals)
-    4. Actionable Remediation (Kill processes, block outbound ports/IPs, physical sweep with HackRF/RF bugs detector, transition to Faraday containment).
-    Provide response in elegant, clean Markdown. Keep the tone highly professional, precise, and tactical.`;
+// Streaming network security scan via SSE (/api/network/scan-stream)
+export async function* analyzeNetworkTargetStream(ip: string): AsyncGenerator<{ text: string }> {
+  const response = await fetch('/api/network/scan-stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: 'Scan stream request failed.' }));
+    throw new Error(err.error || `HTTP error ${response.status}`);
   }
 
-  const response = await safeGenerateContent({
-    model: MODELS.GENERAL,
-    contents: prompt,
-    config: { systemInstruction }
+  if (!response.body) {
+    throw new Error('ReadableStream not supported in this browser.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) continue;
+      const dataStr = trimmed.replace(/^data:\s*/, '');
+      if (dataStr === '[DONE]') {
+        return;
+      }
+      try {
+        const parsed = JSON.parse(dataStr);
+        if (parsed.error) {
+          throw new Error(parsed.error);
+        }
+        if (parsed.text) {
+          yield { text: parsed.text };
+        }
+      } catch (e: any) {
+        if (e.message && dataStr.includes('"error"')) {
+          throw e;
+        }
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const trimmed = buffer.trim();
+    if (trimmed.startsWith('data:')) {
+      const dataStr = trimmed.replace(/^data:\s*/, '');
+      if (dataStr !== '[DONE]') {
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (parsed.text) yield { text: parsed.text };
+        } catch {
+          // ignore trailing partial
+        }
+      }
+    }
+  }
+}
+
+// Static code auditor via server proxy
+export const auditSourceCode = async (code: string): Promise<string> => {
+  const res = await fetch('/api/audit/source', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
   });
-  return response.text;
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Code audit request failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data.text || '';
+};
+
+// Social engineering phishing pretext via server proxy
+export const generatePhishingCampaign = async (topic: string, targetPersona: string): Promise<string> => {
+  const res = await fetch('/api/phishing/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic, targetPersona }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Phishing campaign generation failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data.text || '';
+};
+
+// Malware heuristic analyzer via server proxy
+export const analyzeMalware = async (content: string): Promise<string> => {
+  const res = await fetch('/api/malware/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Malware analysis request failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data.text || '';
+};
+
+// Forensic metadata extractor via server proxy
+export const extractMetadata = async (content: string): Promise<string> => {
+  const res = await fetch('/api/metadata/extract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Metadata extraction failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data.text || '';
+};
+
+// SIGINT / EW telemetry forensic analyzer via server proxy
+export const analyzeSigintData = async (type: 'gps' | 'ew' | 'eavesdropping', logContent: string): Promise<string> => {
+  const res = await fetch('/api/sigint/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, logContent }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Signals intelligence analysis failed.' }));
+    throw new Error(err.error || `HTTP error ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data.text || '';
 };
